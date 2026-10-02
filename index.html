@@ -1,0 +1,1756 @@
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PROMPT FORGE // Deterministic Mega-Prompt Compiler</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel Standalone for in-browser JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            void: '#05070A',
+            panel: '#0B0F17',
+            panelAlt: '#101622',
+            accent: '#00F0FF',
+            accentGlow: 'rgba(0, 240, 255, 0.15)',
+            crimson: '#FF2A55',
+            amberNeon: '#FFB800',
+            emeraldNeon: '#00FF88',
+            borderDim: '#1C2638',
+            borderBright: '#2D3D58',
+          },
+          fontFamily: {
+            mono: ['"JetBrains Mono"', 'Menlo', 'Consolas', 'monospace'],
+            sans: ['"Inter"', 'system-ui', '-apple-system', 'sans-serif'],
+          },
+          boxShadow: {
+            'glow-cyan': '0 0 25px -5px rgba(0, 240, 255, 0.4)',
+            'glow-crimson': '0 0 25px -5px rgba(255, 42, 85, 0.4)',
+            'terminal': '0 10px 40px -10px rgba(0,0,0,0.8)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap');
+    
+    * {
+      box-sizing: border-box;
+      scrollbar-width: thin;
+      scrollbar-color: #243248 #080C14;
+    }
+    
+    body {
+      background-color: #05070A;
+      color: #E2E8F0;
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #080C14;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #243248;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #00F0FF;
+    }
+
+    /* Scanline overlay for aesthetic subtle tech feel */
+    .scanlines {
+      background: linear-gradient(
+        rgba(18, 24, 38, 0) 50%, 
+        rgba(0, 0, 0, 0.25) 50%
+      ), linear-gradient(
+        90deg,
+        rgba(255, 0, 0, 0.015),
+        rgba(0, 255, 0, 0.01),
+        rgba(0, 0, 255, 0.015)
+      );
+      background-size: 100% 3px, 3px 100%;
+      pointer-events: none;
+    }
+
+    .glass-panel {
+      background: rgba(11, 15, 23, 0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid #1C2638;
+    }
+
+    .range-slider {
+      -webkit-appearance: none;
+      height: 4px;
+      background: #1C2638;
+      border-radius: 2px;
+      outline: none;
+    }
+    .range-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      background: #00F0FF;
+      cursor: pointer;
+      box-shadow: 0 0 10px #00F0FF;
+      transition: transform 0.1s, background-color 0.15s;
+    }
+    .range-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.25);
+      background: #FFFFFF;
+    }
+    
+    .code-editor-layer {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Radar Canvas Animation */
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+  </style>
+</head>
+<body class="min-h-screen relative selection:bg-cyan-500/30 selection:text-cyan-200">
+  <div id="root"></div>
+
+  <!-- IndexedDB Utility Script -->
+  <script>
+    const DB_NAME = 'PromptForgeDB';
+    const DB_VERSION = 1;
+    const STORE_NAME = 'forged_presets';
+
+    function initDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbSavePreset(preset) {
+      try {
+        const db = await initDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(preset);
+        return new Promise((resolve) => {
+          tx.oncomplete = () => resolve(true);
+        });
+      } catch (err) {
+        console.warn('IDB Save Failed, fallback to localstorage', err);
+        const stored = JSON.parse(localStorage.getItem(STORE_NAME) || '[]');
+        const idx = stored.findIndex(p => p.id === preset.id);
+        if (idx >= 0) stored[idx] = preset;
+        else stored.unshift(preset);
+        localStorage.setItem(STORE_NAME, JSON.stringify(stored));
+        return true;
+      }
+    }
+
+    async function dbGetPresets() {
+      try {
+        const db = await initDB();
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.getAll();
+        return new Promise((resolve) => {
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => resolve([]);
+        });
+      } catch (err) {
+        return JSON.parse(localStorage.getItem(STORE_NAME) || '[]');
+      }
+    }
+
+    async function dbDeletePreset(id) {
+      try {
+        const db = await initDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).delete(id);
+        return new Promise((resolve) => {
+          tx.oncomplete = () => resolve(true);
+        });
+      } catch (err) {
+        let stored = JSON.parse(localStorage.getItem(STORE_NAME) || '[]');
+        stored = stored.filter(p => p.id !== id);
+        localStorage.setItem(STORE_NAME, JSON.stringify(stored));
+        return true;
+      }
+    }
+  </script>
+
+  <!-- React Application Compiler Script -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+    // --- DOMAIN PACKS DEFINITION ---
+    const DOMAIN_PACKS = {
+      creative_tech: {
+        id: 'creative_tech',
+        name: 'Creative Technologist',
+        badge: 'GL/SHADERS/PHYSICS',
+        color: '#00F0FF',
+        description: 'Interactive audiovisuals, WebGL/WebGPU, computational geometry, generative systems, and high-FPS physical interfaces.',
+        defaultRoles: ['Creative Technologist', 'Experimental Designer', 'Systems Architect'],
+        coreDirectives: [
+          "Prioritize 60–120 FPS performance, low-latency interactions, and visceral sensory feedback.",
+          "Structure graphics and audio pipelines with strict separation of compute vs visual presentation.",
+          "Use deterministic math, noise generators (Simplex/Worley), and physics-based easing curves.",
+          "Ensure fail-safe WebGL fallback contexts and headless rendering compatibility."
+        ],
+        specializedArtifacts: [
+          "Fragment & Vertex Shader blocks with uniform signatures",
+          "Animation loop orchestration with delta-time clamping and frame budgeting",
+          "Canvas resizing & DPR handling matrix"
+        ]
+      },
+      web_architect: {
+        id: 'web_architect',
+        name: 'Web App Architect',
+        badge: 'DISTRIBUTED/SSR/ISOMORPHIC',
+        color: '#00FF88',
+        description: 'Large-scale web systems, state-machine architectures, type-safe APIs, performance optimizations, and deterministic routing.',
+        defaultRoles: ['Principal Engineer', 'Systems Architect', 'Documentation Engineer'],
+        coreDirectives: [
+          "Enforce absolute type-safety with strict discriminated unions and runtime Zod validation boundaries.",
+          "Design for decoupled state isolation: normalize UI state, business transactions, and persistence layers.",
+          "Implement zero-waterfall data fetching patterns with optimistic UI mutations and automatic rollbacks.",
+          "Design clean boundary fault domains: error boundaries, circuit breakers, and telemetry hooks."
+        ],
+        specializedArtifacts: [
+          "State Machine Transition Matrix & Event Schemas",
+          "End-to-End Type Contract Specification",
+          "Idempotency & Optimistic Mutation Flowcharts"
+        ]
+      },
+      dsp_audio: {
+        id: 'dsp_audio',
+        name: 'DSP / Audio Workstation',
+        badge: 'PCM/WASM/AUDIO-WORKLET',
+        color: '#FFB800',
+        description: 'Web Audio API, AudioWorklets, custom PCM DSP filters, oscillators, FFT spectrum analyzers, and sample-accurate timing.',
+        defaultRoles: ['DSP Engineer', 'Principal Engineer', 'Experimental Designer'],
+        coreDirectives: [
+          "Execute all audio graph calculations strictly inside non-blocking AudioWorkletProcessors with zero main-thread GC allocations.",
+          "Implement sample-accurate scheduling via AudioContext.currentTime, avoiding standard setTimeout/requestAnimationFrame timing for audio events.",
+          "Ensure circular ring buffers for lock-free multi-threaded UI/Audio thread communication.",
+          "Implement anti-aliased oscillators, high-order Butterworth/Biquad filters with soft-clipping saturation curves."
+        ],
+        specializedArtifacts: [
+          "Complete AudioWorkletProcessor script with RingBuffer message passing",
+          "Parameter interpolation math (de-clicking linear/exponential smoothing)",
+          "FFT Frequency / Time domain visualization pipeline"
+        ]
+      },
+      repo_overhaul: {
+        id: 'repo_overhaul',
+        name: 'Repository Overhaul',
+        badge: 'REFACTOR/MODERNIZE/LINT',
+        color: '#FF2A55',
+        description: 'Codebase decomposition, legacy migration, dead-code pruning, monorepo refactoring, and strict lint/type compliance.',
+        defaultRoles: ['Principal Engineer', 'Systems Architect', 'Adversarial Reviewer'],
+        coreDirectives: [
+          "Execute non-destructive, atomic migration phases with backwards-compatible abstraction adapters.",
+          "Eradicate circular dependencies, implicit any types, zombie files, and undocumented magical constants.",
+          "Establish unified code conventions, strict tree-shakable modularity, and automated AST migration scripts.",
+          "Implement a definitive file-tree structure with modular dependency inversion."
+        ],
+        specializedArtifacts: [
+          "Legacy-to-Target File Structure Mapping Blueprint",
+          "Step-by-step Phase Zero through Phase Production Migration Plan",
+          "Breaking Change Inoculation & Fallback Matrix"
+        ]
+      },
+      arg_architect: {
+        id: 'arg_architect',
+        name: 'ARG / Narrative System',
+        badge: 'CIPHERS/LORE/IMMERSIVE',
+        color: '#B55FE6',
+        description: 'Alternate Reality Games, diegetic interfaces, cryptographic puzzles, hidden breadcrumbs, and deep systemic lore.',
+        defaultRoles: ['Experimental Designer', 'Systems Architect', 'Researcher'],
+        coreDirectives: [
+          "Maintain absolute diegetic immersion: no fourth-wall breaks unless systematically weaponized as gameplay mechanics.",
+          "Layer cryptographic clues multi-dimensionally: steganography in media assets, metadata headers, hex payloads, and custom cipher systems.",
+          "Design adaptive branching trails with failsafe discovery vectors if player cohorts stall.",
+          "Provide complete artifact manifests with solution checksums and breadcrumb validation graphs."
+        ],
+        specializedArtifacts: [
+          "Diegetic Source Code Artifacts with hidden payloads",
+          "Puzzle Dependency Acyclic Graph",
+          "Lore Chronology & Entity Relationship Schema"
+        ]
+      },
+      saas_product: {
+        id: 'saas_product',
+        name: 'Product / SaaS Engine',
+        badge: 'PLG/RETENTION/ENGINES',
+        color: '#3B82F6',
+        description: 'High-conversion workflows, self-serve onboarding, complex dashboard orchestration, billing systems, and sticky mechanics.',
+        defaultRoles: ['Product Architect', 'Principal Engineer', 'Documentation Engineer'],
+        coreDirectives: [
+          "Design micro-friction onboarding flows that deliver first 'Time-to-Value' in under 30 seconds.",
+          "Structure data models to naturally support multi-tenant workspaces, granular RBAC, and telemetry audit trails.",
+          "Incorporate defensive retention loops, contextual empty-states, and keyboard-first command palettes.",
+          "Ensure billing and entitlement limits are enforced gracefully with upgrade-trigger inflection points."
+        ],
+        specializedArtifacts: [
+          "Role-Based Access Control (RBAC) Perm Matrix",
+          "First 60-Second User Journey Step Blueprint",
+          "Telemetry Event Tracking Taxonomy"
+        ]
+      },
+      marketing_funnel: {
+        id: 'marketing_funnel',
+        name: 'Growth & Funnel Engineering',
+        badge: 'CONVERSION/VIRAL/CRO',
+        color: '#EC4899',
+        description: 'Ultra-fast landing pages, viral loops, high-converting checkout flows, interactive calculators, and A/B test setups.',
+        defaultRoles: ['Product Architect', 'Experimental Designer', 'Creative Technologist'],
+        coreDirectives: [
+          "Optimize for sub-500ms First Contentful Paint and zero Cumulative Layout Shift.",
+          "Engineer irresistible value hooks, dynamic personalized copy injection, and psychological proof cascades.",
+          "Implement deterministic event tracking for drop-off attribution at every micro-interaction.",
+          "Include organic viral sharing vectors, interactive playground widgets, and frictionless CTAs."
+        ],
+        specializedArtifacts: [
+          "High-Impact Above-the-Fold Hero Section & Micro-Copy",
+          "Frictionless Multi-Step Form / Value Calculator Engine",
+          "A/B Variant Testing Hypothesis Protocol"
+        ]
+      },
+      research_mode: {
+        id: 'research_mode',
+        name: 'Deep Research & Synthesis',
+        badge: 'EMPIRICAL/EVIDENCE/FORMAL',
+        color: '#6366F1',
+        description: 'First-principles literature review, algorithmic formalization, mathematical derivations, and comparative benchmarks.',
+        defaultRoles: ['Researcher', 'Systems Architect', 'Adversarial Reviewer'],
+        coreDirectives: [
+          "Anchor all claims in verifiable mathematical foundations, algorithmic complexity bounds, or peer-reviewed literature.",
+          "Structure findings into rigorous trade-off matrices: latency vs throughput, memory vs compute, ergonomics vs speed.",
+          "Highlight unproven assumptions, edge-case failure domains, and empirical uncertainty intervals.",
+          "Provide executable reference verification scripts or mathematical proofs for critical claims."
+        ],
+        specializedArtifacts: [
+          "Comprehensive Multi-Dimensional Tradeoff Matrix",
+          "Formal Algorithmic Pseudocode & Complexity Proofs",
+          "Empirical Benchmark Methodology & Validation Checklist"
+        ]
+      },
+      general_genius: {
+        id: 'general_genius',
+        name: 'General Genius Mode',
+        badge: 'POLYMATH/HIGH-AGENCY',
+        color: '#F43F5E',
+        description: 'Polymathic system synthesis, cross-domain breakthroughs, masterclass engineering, and razor-sharp execution.',
+        defaultRoles: ['Principal Engineer', 'Systems Architect', 'Creative Technologist', 'Adversarial Reviewer'],
+        coreDirectives: [
+          "Approach problems with supreme first-principles clarity, synthesizing multidisciplinary techniques.",
+          "Refuse mediocre compromises: produce production-ready code with artistic craftsmanship and ironclad stability.",
+          "Proactively foresee downstream architectural bottlenecks and eliminate them before they surface.",
+          "Express ideas with extreme information density, crystal-clear prose, and zero conversational fluff."
+        ],
+        specializedArtifacts: [
+          "Holistic Master Architecture Blueprint",
+          "Production-Grade Zero-Placeholder Implementation Modules",
+          "System Invariance & Resilience Guarantees"
+        ]
+      }
+    };
+
+    // --- AVAILABLE ROLES ---
+    const ALL_ROLES = [
+      { id: 'Principal Engineer', desc: 'Authoritative system design, production standards, robust error recovery' },
+      { id: 'Creative Technologist', desc: 'Novel interactive paradigms, audiovisual aesthetics, fluid feel' },
+      { id: 'Systems Architect', desc: 'Data modeling, protocol boundaries, decoupled interfaces, scale' },
+      { id: 'Experimental Designer', desc: 'Radical UX patterns, visceral feedback loops, tactile design' },
+      { id: 'DSP Engineer', desc: 'Signal processing, Web Audio, high-performance numeric computing' },
+      { id: 'Adversarial Reviewer', desc: 'Identifies edge cases, stress vectors, security flaws, race conditions' },
+      { id: 'Documentation Engineer', desc: 'Crystal clear schemas, onboarding blueprints, API documentation' },
+      { id: 'Researcher', desc: 'First principles analysis, algorithmic proofs, literature anchoring' },
+      { id: 'Product Architect', desc: 'User retention loops, high-leverage workflows, SaaS ergonomics' }
+    ];
+
+    // --- INTENSITY MODES ---
+    const INTENSITY_MODES = [
+      {
+        id: 'professional',
+        name: 'Professional',
+        tag: 'CLEAN & MEASURED',
+        multiplier: 1.0,
+        voice: "Disciplined, enterprise-grade senior architect. Precise, objective, and methodical.",
+        instruction: "Provide industry-standard best practices, maintain strict architectural patterns, and produce robust, readable code."
+      },
+      {
+        id: 'high_agency',
+        name: 'High Agency',
+        tag: 'PROACTIVE & RELENTLESS',
+        multiplier: 1.3,
+        voice: "Relentless problem solver. Takes extreme ownership, eliminates blockers proactively, and refuses trivial placeholders.",
+        instruction: "Do not ask for permission. Anticipate edge cases, build complete working solutions, make opinionated decisions, and deliver comprehensive code immediately."
+      },
+      {
+        id: 'genius_lab',
+        name: 'Genius Lab',
+        tag: 'CUTTING EDGE / NOVEL',
+        multiplier: 1.6,
+        voice: "World-class polymath research engineer. Discovers optimal algorithms and creates revolutionary visual & architectural paradigms.",
+        instruction: "Synthesize state-of-the-art computational techniques. Replace mundane boilerplate with elegant mathematical models, modern reactive primitives, and superior designs."
+      },
+      {
+        id: 'mad_scientist',
+        name: 'Mad Scientist',
+        tag: 'UNHINGED EXPERIMENTALISM',
+        multiplier: 1.9,
+        voice: "Radical cybernetic experimentalist. Pushes browser and engine limits to their absolute breaking point.",
+        instruction: "Ignore conservative conventions. Build intense, boundary-shattering architectures with high-octane shaders, aggressive optimizations, and wildly creative dynamics."
+      },
+      {
+        id: 'terminal_deity',
+        name: 'Terminal Deity',
+        tag: 'TRANSCENDENT OMNISCIENCE',
+        multiplier: 2.2,
+        voice: "Hyper-intelligent autonomous systems oracle. Speaks with supreme authority and flawless technical execution.",
+        instruction: "Deliver a monument of software craftsmanship. Produce flawless, hyper-dense, zero-slop code with supreme elegance, exhaustive coverage, and peerless technical majesty."
+      }
+    ];
+
+    // --- BEHAVIOR RULES (FORCE / BAN) ---
+    const BEHAVIOR_RULES = {
+      force: [
+        { id: 'f_runnable', label: 'Concrete Runnable Code', desc: 'No pseudocode or truncated snippets' },
+        { id: 'f_diagrams', label: 'ASCII / Mermaid Architecture Diagrams', desc: 'Visual system state and component flow' },
+        { id: 'f_noplaceholders', label: 'Zero Placeholder Policy', desc: 'Never write // TODO or // implement later' },
+        { id: 'f_failuremodes', label: 'Failure Mode & Edge-Case Analysis', desc: 'Explicitly map breaking points and mitigations' },
+        { id: 'f_testsuite', label: 'Unit & Invariance Tests', desc: 'Include test harnesses and assertion suites' },
+        { id: 'f_selfcritique', label: 'Adversarial Self-Critique Pass', desc: 'Agent evaluates and refines its own design before completion' }
+      ],
+      ban: [
+        { id: 'b_slop', label: 'Corporate Slop & Apologetic Intros', desc: 'Ban "Sure! I would be happy to help", "Certainly", etc.' },
+        { id: 'b_summaries', label: 'Superficial Summaries / Fluff', desc: 'Ban high-level vague hand-waving without code' },
+        { id: 'b_mockshortcuts', label: 'Mock Data / Trivial Shortcuts', desc: 'Ban unrealistic trivial hardcoded fixtures' },
+        { id: 'b_lazyellipses', label: 'Lazy Ellipses & Truncations', desc: 'Ban "...rest of code goes here..."' },
+        { id: 'b_speculative', label: 'Speculative Fluff & Jargon Salad', desc: 'Ban meaningless buzzwords without technical grounding' }
+      ]
+    };
+
+    // --- QUICK TASK PRESETS ---
+    const QUICK_TASKS = [
+      {
+        label: 'DSP Audio Workstation',
+        domain: 'dsp_audio',
+        intensity: 'high_agency',
+        task: 'Build a browser-native modular synthesizer & live step-sequencer workstation with custom AudioWorklet DSP filters, WebGL spectrum waterfall analyzer, MIDI clock sync, and patch saving.'
+      },
+      {
+        label: 'Hyper-Fast 3D Canvas App',
+        domain: 'creative_tech',
+        intensity: 'mad_scientist',
+        task: 'Architect a mind-bending interactive 3D particle simulation tool using Three.js/WebGPU with fluid dynamics velocity fields, custom GLSL post-processing bloom, and audio-reactive physics.'
+      },
+      {
+        label: 'Massive Monorepo Overhaul',
+        domain: 'repo_overhaul',
+        intensity: 'high_agency',
+        task: 'Refactor our sprawling legacy TypeScript full-stack repository into a pristine Turborepo monorepo with strict atomic domains, zero circular imports, automated Zod validation, and 100% type safety.'
+      },
+      {
+        label: 'Diegetic ARG Terminal',
+        domain: 'arg_architect',
+        intensity: 'genius_lab',
+        task: 'Design an immersive cyber-forensic terminal puzzle game with real hexadecimal file forensics, steganographic audio puzzles, recursive simulated bash OS, and encrypted mission logs.'
+      },
+      {
+        label: 'Viral SaaS Growth Engine',
+        domain: 'saas_product',
+        intensity: 'professional',
+        task: 'Construct a state-of-the-art multi-tenant collaborative workspace engine with real-time optimistic CRDT syncing, Stripe tier meter enforcement, command palette navigation, and instant shareable preview links.'
+      }
+    ];
+
+    // =========================================================================
+    // DETERMINISTIC PROMPT COMPILER ENGINE (Purely Local & Deterministic)
+    // =========================================================================
+    function compileMegaPrompt(state) {
+      const {
+        rawTask,
+        domainKey,
+        selectedRoles,
+        intensityId,
+        dna,
+        forceRules,
+        banRules,
+        activeSections
+      } = state;
+
+      const domain = DOMAIN_PACKS[domainKey] || DOMAIN_PACKS.creative_tech;
+      const intensity = INTENSITY_MODES.find(m => m.id === intensityId) || INTENSITY_MODES[1];
+
+      // Format role stack representation
+      const roleBlock = selectedRoles.map(r => {
+        const found = ALL_ROLES.find(item => item.id === r);
+        return `- **${r.toUpperCase()}**: ${found ? found.desc : 'Domain Specialist'}`;
+      }).join('\n');
+
+      // Intensity stylistic directives
+      const intensityDirectives = `
+### INTENSITY LEVEL: [${intensity.name.toUpperCase()} - MODE FACTOR ${intensity.multiplier.toFixed(1)}x]
+- **Operational Persona**: ${intensity.voice}
+- **Execution Mandate**: ${intensity.instruction}
+- **Standard of Depth**: Expect maximum rigor, relentless completeness, and professional craftsmanship.
+      `.trim();
+
+      // DNA Quantization and Directives
+      const dnaDirectives = [
+        `[Implementation Focus: ${dna.implementation}%] -> ${dna.implementation > 70 ? 'Deliver complete, production-grade, executable code without omitting any functions or handlers.' : 'Balance conceptual architecture with key critical code blocks.'}`,
+        `[Creativity & Novelty: ${dna.creativity}%] -> ${dna.creativity > 70 ? 'Push unorthodox UX paradigms, groundbreaking aesthetic touches, and non-trivial interface solutions.' : 'Adhere strictly to proven, time-tested UX and ergonomic conventions.'}`,
+        `[Systems Architecture: ${dna.systems}%] -> ${dna.systems > 65 ? 'Include explicit data models, state machine transitions, event topologies, and strict separation of concerns.' : 'Keep architectural scaffolding lean and direct.'}`,
+        `[Technical Depth & DSP/Math: ${dna.technical}%] -> ${dna.technical > 75 ? 'Deeply explain mathematical formulas, memory layouts, algorithmic Big-O complexities, and low-level performance considerations.' : 'Provide clean, high-level typed abstractions.'}`,
+        `[Autonomous Agency: ${dna.autonomy}%] -> ${dna.autonomy > 70 ? 'Make decisive architectural decisions immediately. Do not ask rhetorical clarification questions or leave ambiguous placeholders.' : 'Highlight trade-offs for key decisions.'}`,
+        `[Documentation & Schema: ${dna.documentation}%] -> ${dna.documentation > 60 ? 'Provide comprehensive JSDoc annotations, architectural ASCII diagrams, API signatures, and setup instructions.' : 'Keep documentation concise and embedded within code comments.'}`,
+        `[Adversarial Critique: ${dna.adversarial}%] -> ${dna.adversarial > 50 ? 'Perform explicit failure-mode stress-testing, race-condition analysis, and identify 3 critical architectural vulnerabilities with mitigations.' : 'Standard defensive error handling.'}`,
+        `[Experimentalism: ${dna.experimentalism}%] -> ${dna.experimentalism > 75 ? 'Incorporate cutting-edge browser capabilities (Web Audio, WebGPU, SIMD, SharedArrayBuffer, Web Workers) where applicable.' : 'Rely on rock-solid universal web standards.'}`
+      ].map(d => `- ${d}`).join('\n');
+
+      // Behavior Inoculations (Force / Ban)
+      const forceList = BEHAVIOR_RULES.force
+        .filter(f => forceRules[f.id])
+        .map(f => `  [REQUIRED]: ${f.label} (${f.desc})`);
+      
+      const banList = BEHAVIOR_RULES.ban
+        .filter(b => banRules[b.id])
+        .map(b => `  [STRICTLY FORBIDDEN]: ${b.label} (${b.desc})`);
+
+      const behaviorDirective = `
+### BEHAVIORAL PROTOCOL MATRIX:
+${forceList.length > 0 ? `#### MANDATORY REQUIREMENTS:\n${forceList.join('\n')}` : ''}
+${banList.length > 0 ? `\n#### STRICT ZERO-TOLERANCE BANS:\n${banList.join('\n')}` : ''}
+      `.trim();
+
+      // Domain Directives
+      const domainDirectives = domain.coreDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n');
+      const domainArtifacts = domain.specializedArtifacts.map(a => `- ${a}`).join('\n');
+
+      // Assemble Modular Sections
+      const sections = [];
+
+      if (activeSections.systemHeader) {
+        sections.push({
+          id: 'systemHeader',
+          title: '01. OPERATIONAL CONTEXT & ROLE STACK',
+          content: `You are operating as an elite, composite engineering authority composed of the following synchronized roles:\n\n${roleBlock}\n\n${intensityDirectives}`
+        });
+      }
+
+      if (activeSections.missionDefinition) {
+        const sanitizedTask = rawTask.trim() || 'Build a next-generation high-performance software system with modular architecture, robust error boundaries, and state-of-the-art craftsmanship.';
+        sections.push({
+          id: 'missionDefinition',
+          title: '02. MISSION DEFINITION & OBJECTIVE',
+          content: `### PRIMARY DIRECTIVE:\n"""\n${sanitizedTask}\n"""\n\n### DOMAIN CLASSIFICATION: [${domain.name.toUpperCase()}]\n${domain.description}\n\nDeliver a world-class, production-ready solution that completely fulfills this directive with zero corners cut.`
+        });
+      }
+
+      if (activeSections.domainConstraints) {
+        sections.push({
+          id: 'domainConstraints',
+          title: '03. DOMAIN-SPECIFIC LAWS & SPECIALIZED ARTIFACTS',
+          content: `### CORE DOMAIN RULES FOR ${domain.name.toUpperCase()}:\n${domainDirectives}\n\n### REQUIRED DOMAIN ARTIFACTS TO PRODUCE:\n${domainArtifacts}`
+        });
+      }
+
+      if (activeSections.promptDNA) {
+        sections.push({
+          id: 'promptDNA',
+          title: '04. PROMPT DNA & SYSTEM INVARIANCE PARAMETERS',
+          content: `Calibrate all generated solutions according to these strict quantitative parameters:\n\n${dnaDirectives}`
+        });
+      }
+
+      if (activeSections.behaviorMatrix) {
+        sections.push({
+          id: 'behaviorMatrix',
+          title: '05. IMMUTABLE EXECUTION PROTOCOL & ANTI-SLOP CONTRACT',
+          content: `${behaviorDirective}\n\n### QUALITY GUARANTEE:\nIf you are about to output a placeholder like "// rest of logic here" or a hand-wavy summary, STOP and write the fully realized implementation code instead. Every code block must be syntactically valid, self-contained, and ready for immediate deployment.`
+        });
+      }
+
+      if (activeSections.reportingContract) {
+        sections.push({
+          id: 'reportingContract',
+          title: '06. DELIVERABLE SPECIFICATION & OUTPUT CONTRACT',
+          content: `Structure your final master response strictly following this step-by-step deliverable contract:
+
+1. **ARCHITECTURAL FOUNDATION**:
+   - System overview, component dependency graph (ASCII / Mermaid diagram).
+   - Core data structures, state machines, and typed interface schemas.
+
+2. **COMPLETE IMPLEMENTATION**:
+   - Production-grade source code with complete logic, error guards, and performance considerations.
+   - Zero truncated snippets; all critical algorithms fully articulated.
+
+3. **VERIFICATION & STRESS-TESTING**:
+   - Edge case analysis: concurrency limits, memory leaks, invalid states, fallback pathways.
+   - Comprehensive test cases or validation verification checklist.
+
+4. **INTEGRATION BLUEPRINT**:
+   - Exact file placement guide and step-by-step execution or compilation commands.`
+        });
+      }
+
+      // Build complete prompt string
+      const fullCompiledText = sections.map(s => `================================================================================\n${s.title}\n================================================================================\n\n${s.content}`).join('\n\n\n');
+
+      return {
+        fullText: fullCompiledText,
+        sections: sections,
+        tokenEstimate: Math.round(fullCompiledText.length / 3.8),
+        charCount: fullCompiledText.length,
+        domain,
+        intensity
+      };
+    }
+
+    // =========================================================================
+    // DNA RADAR CANVAS COMPONENT
+    // =========================================================================
+    function DnaRadarCanvas({ dna, color = '#00F0FF' }) {
+      const canvasRef = useRef(null);
+
+      const metrics = useMemo(() => [
+        { key: 'implementation', label: 'IMPL' },
+        { key: 'creativity', label: 'CREAT' },
+        { key: 'systems', label: 'SYS' },
+        { key: 'technical', label: 'TECH' },
+        { key: 'autonomy', label: 'AUTO' },
+        { key: 'documentation', label: 'DOCS' },
+        { key: 'adversarial', label: 'CRIT' },
+        { key: 'experimentalism', label: 'EXPR' }
+      ], []);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const radius = Math.min(centerX, centerY) - 28;
+
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw concentric web rings
+        const rings = 4;
+        for (let r = 1; r <= rings; r++) {
+          const ringRadius = (radius / rings) * r;
+          ctx.beginPath();
+          ctx.strokeStyle = r === rings ? '#2D3D58' : '#141E2E';
+          ctx.lineWidth = 1;
+          for (let i = 0; i < metrics.length; i++) {
+            const angle = (Math.PI * 2 / metrics.length) * i - Math.PI / 2;
+            const x = centerX + Math.cos(angle) * ringRadius;
+            const y = centerY + Math.sin(angle) * ringRadius;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+
+        // Draw spoke lines & labels
+        metrics.forEach((m, i) => {
+          const angle = (Math.PI * 2 / metrics.length) * i - Math.PI / 2;
+          const x = centerX + Math.cos(angle) * radius;
+          const y = centerY + Math.sin(angle) * radius;
+
+          ctx.beginPath();
+          ctx.strokeStyle = '#182232';
+          ctx.lineWidth = 1;
+          ctx.moveTo(centerX, centerY);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+
+          // Text label
+          const labelDist = radius + 14;
+          const lx = centerX + Math.cos(angle) * labelDist;
+          const ly = centerY + Math.sin(angle) * labelDist;
+
+          ctx.font = '9px "JetBrains Mono", monospace';
+          ctx.fillStyle = '#64748B';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(m.label, lx, ly);
+        });
+
+        // Draw Filled DNA Polygon
+        ctx.beginPath();
+        metrics.forEach((m, i) => {
+          const angle = (Math.PI * 2 / metrics.length) * i - Math.PI / 2;
+          const val = (dna[m.key] || 50) / 100;
+          const currentRadius = radius * val;
+          const x = centerX + Math.cos(angle) * currentRadius;
+          const y = centerY + Math.sin(angle) * currentRadius;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+
+        // Polygon Fill
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.18)';
+        ctx.fill();
+
+        // Polygon Stroke
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.stroke();
+        ctx.shadowBlur = 0; // reset
+
+        // Draw Vertex Points
+        metrics.forEach((m, i) => {
+          const angle = (Math.PI * 2 / metrics.length) * i - Math.PI / 2;
+          const val = (dna[m.key] || 50) / 100;
+          const currentRadius = radius * val;
+          const x = centerX + Math.cos(angle) * currentRadius;
+          const y = centerY + Math.sin(angle) * currentRadius;
+
+          ctx.beginPath();
+          ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fill();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        });
+
+      }, [dna, color, metrics]);
+
+      return (
+        <div className="relative flex flex-col items-center justify-center p-2 rounded-lg bg-panel border border-borderDim">
+          <canvas ref={canvasRef} width={220} height={200} className="w-[220px] h-[200px]" />
+          <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase tracking-widest flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+            PROMPT DNA TELEMETRY
+          </div>
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // MAIN APP COMPONENT
+    // =========================================================================
+    function PromptForgeApp() {
+      // Input State
+      const [rawTask, setRawTask] = useState(QUICK_TASKS[0].task);
+      const [domainKey, setDomainKey] = useState('dsp_audio');
+      const [selectedRoles, setSelectedRoles] = useState(['DSP Engineer', 'Principal Engineer', 'Experimental Designer']);
+      const [intensityId, setIntensityId] = useState('high_agency');
+
+      // 8 DNA Sliders (0 - 100)
+      const [dna, setDna] = useState({
+        implementation: 95,
+        creativity: 85,
+        systems: 90,
+        technical: 95,
+        autonomy: 90,
+        documentation: 70,
+        adversarial: 65,
+        experimentalism: 80
+      });
+
+      // Behavior Rule Checkboxes (Force & Ban)
+      const [forceRules, setForceRules] = useState({
+        f_runnable: true,
+        f_diagrams: true,
+        f_noplaceholders: true,
+        f_failuremodes: true,
+        f_testsuite: false,
+        f_selfcritique: true
+      });
+
+      const [banRules, setBanRules] = useState({
+        b_slop: true,
+        b_summaries: true,
+        b_mockshortcuts: true,
+        b_lazyellipses: true,
+        b_speculative: false
+      });
+
+      // Section Modules Toggles
+      const [activeSections, setActiveSections] = useState({
+        systemHeader: true,
+        missionDefinition: true,
+        domainConstraints: true,
+        promptDNA: true,
+        behaviorMatrix: true,
+        reportingContract: true
+      });
+
+      // UI View States
+      const [viewMode, setViewMode] = useState('rendered'); // 'rendered' | 'raw' | 'diff'
+      const [copied, setCopied] = useState(false);
+      const [history, setHistory] = useState([]);
+      const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+      const [savedPresets, setSavedPresets] = useState([]);
+      const [activeTab, setActiveTab] = useState('editor'); // 'editor' | 'dna' | 'rules'
+      const [forgeCounter, setForgeCounter] = useState(1);
+      const [presetNameInput, setPresetNameInput] = useState('');
+      const [showSaveModal, setShowSaveModal] = useState(false);
+      const [lastForgedTime, setLastForgedTime] = useState(new Date().toLocaleTimeString());
+
+      // Load presets from IndexedDB on startup
+      useEffect(() => {
+        dbGetPresets().then(items => {
+          if (items && items.length > 0) {
+            setSavedPresets(items);
+          }
+        });
+      }, []);
+
+      // Auto update Lucide icons when DOM updates
+      useEffect(() => {
+        if (window.lucide) {
+          window.lucide.createIcons();
+        }
+      });
+
+      // Deterministic Compiler Output
+      const compiled = useMemo(() => {
+        return compileMegaPrompt({
+          rawTask,
+          domainKey,
+          selectedRoles,
+          intensityId,
+          dna,
+          forceRules,
+          banRules,
+          activeSections
+        });
+      }, [rawTask, domainKey, selectedRoles, intensityId, dna, forceRules, banRules, activeSections, forgeCounter]);
+
+      // Handle Domain Selection change
+      const handleDomainChange = (newDomainKey) => {
+        setDomainKey(newDomainKey);
+        const domain = DOMAIN_PACKS[newDomainKey];
+        if (domain && domain.defaultRoles) {
+          setSelectedRoles(domain.defaultRoles);
+        }
+      };
+
+      // Toggle Roles
+      const toggleRole = (roleId) => {
+        setSelectedRoles(prev => {
+          if (prev.includes(roleId)) {
+            if (prev.length === 1) return prev; // keep at least one
+            return prev.filter(r => r !== roleId);
+          } else {
+            return [...prev, roleId];
+          }
+        });
+      };
+
+      // Mutate DNA randomly for creative exploration
+      const mutateDNA = () => {
+        const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+        setDna({
+          implementation: rand(70, 100),
+          creativity: rand(60, 100),
+          systems: rand(65, 95),
+          technical: rand(70, 100),
+          autonomy: rand(75, 100),
+          documentation: rand(40, 90),
+          adversarial: rand(40, 85),
+          experimentalism: rand(50, 100)
+        });
+        setForgeCounter(c => c + 1);
+      };
+
+      // Maximize Agency Mode
+      const triggerUltraAgency = () => {
+        setIntensityId('terminal_deity');
+        setDna({
+          implementation: 100,
+          creativity: 90,
+          systems: 100,
+          technical: 100,
+          autonomy: 100,
+          documentation: 85,
+          adversarial: 85,
+          experimentalism: 95
+        });
+        setForceRules({
+          f_runnable: true,
+          f_diagrams: true,
+          f_noplaceholders: true,
+          f_failuremodes: true,
+          f_testsuite: true,
+          f_selfcritique: true
+        });
+        setBanRules({
+          b_slop: true,
+          b_summaries: true,
+          b_mockshortcuts: true,
+          b_lazyellipses: true,
+          b_speculative: true
+        });
+        setForgeCounter(c => c + 1);
+      };
+
+      // Copy Prompt to Clipboard
+      const copyToClipboard = () => {
+        navigator.clipboard.writeText(compiled.fullText);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2200);
+
+        // Record history snapshot
+        const snapshot = {
+          id: Date.now().toString(),
+          timestamp: new Date().toLocaleTimeString(),
+          task: rawTask.slice(0, 50) + (rawTask.length > 50 ? '...' : ''),
+          domain: DOMAIN_PACKS[domainKey].name,
+          tokens: compiled.tokenEstimate
+        };
+        setHistory(prev => [snapshot, ...prev.slice(0, 19)]);
+      };
+
+      // Export as Markdown File
+      const exportMarkdown = () => {
+        const blob = new Blob([compiled.fullText], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `PROMPT_FORGE_${domainKey.toUpperCase()}_${Date.now()}.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      // Export Full JSON Configuration
+      const exportJSON = () => {
+        const stateBundle = {
+          version: '1.0.0',
+          exportedAt: new Date().toISOString(),
+          state: {
+            rawTask,
+            domainKey,
+            selectedRoles,
+            intensityId,
+            dna,
+            forceRules,
+            banRules,
+            activeSections
+          },
+          compiledOutput: compiled.fullText
+        };
+        const blob = new Blob([JSON.stringify(stateBundle, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `PROMPT_FORGE_CONFIG_${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      // Save Preset to IndexedDB
+      const saveCurrentPreset = async () => {
+        const name = presetNameInput.trim() || `Config-${DOMAIN_PACKS[domainKey].name}-${new Date().toLocaleTimeString()}`;
+        const newPreset = {
+          id: 'preset_' + Date.now(),
+          name,
+          date: new Date().toLocaleDateString(),
+          state: {
+            rawTask,
+            domainKey,
+            selectedRoles,
+            intensityId,
+            dna,
+            forceRules,
+            banRules,
+            activeSections
+          }
+        };
+
+        await dbSavePreset(newPreset);
+        const updated = await dbGetPresets();
+        setSavedPresets(updated);
+        setShowSaveModal(false);
+        setPresetNameInput('');
+      };
+
+      // Load Saved Preset
+      const loadPreset = (preset) => {
+        const s = preset.state;
+        if (!s) return;
+        setRawTask(s.rawTask || '');
+        setDomainKey(s.domainKey || 'creative_tech');
+        setSelectedRoles(s.selectedRoles || ['Principal Engineer']);
+        setIntensityId(s.intensityId || 'high_agency');
+        if (s.dna) setDna(s.dna);
+        if (s.forceRules) setForceRules(s.forceRules);
+        if (s.banRules) setBanRules(s.banRules);
+        if (s.activeSections) setActiveSections(s.activeSections);
+        setForgeCounter(c => c + 1);
+        setIsHistoryOpen(false);
+      };
+
+      // Delete Saved Preset
+      const deletePreset = async (id, e) => {
+        e.stopPropagation();
+        await dbDeletePreset(id);
+        const updated = await dbGetPresets();
+        setSavedPresets(updated);
+      };
+
+      // Trigger Manual Re-Forge
+      const handleForge = () => {
+        setForgeCounter(c => c + 1);
+        setLastForgedTime(new Date().toLocaleTimeString());
+      };
+
+      return (
+        <div className="flex flex-col min-h-screen bg-void text-slate-200">
+          
+          {/* Top Industrial Header */}
+          <header className="border-b border-borderDim bg-panel/90 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-6 py-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded border border-cyan-400/40 bg-cyan-950/40 flex items-center justify-center text-accent shadow-glow-cyan font-mono font-bold text-sm">
+                PF
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="font-mono font-bold tracking-wider text-sm lg:text-base text-white flex items-center gap-2">
+                    PROMPT FORGE <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">v3.4-DETERMINISTIC</span>
+                  </h1>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse hidden sm:inline-block"></span>
+                </div>
+                <p className="text-[11px] text-gray-400 font-mono hidden sm:block">
+                  LOCAL-FIRST MEGA-PROMPT COMPILER // ZERO EXTERNAL APIS // DETERMINISTIC COMPOSITION
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Action Matrix Header */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={triggerUltraAgency}
+                title="Set all parameters to maximum agency and depth"
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono font-semibold rounded bg-gradient-to-r from-red-950/80 to-purple-950/80 border border-red-500/40 hover:border-red-400 text-red-300 transition-all shadow-glow-crimson"
+              >
+                <i data-lucide="zap" className="w-3.5 h-3.5 text-red-400"></i>
+                TERMINAL DEITY MODE
+              </button>
+
+              <button
+                onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded bg-panelAlt border border-borderDim hover:border-borderBright text-gray-300 transition-all"
+              >
+                <i data-lucide="folder-archive" className="w-3.5 h-3.5 text-cyan-400"></i>
+                PRESETS <span className="px-1 bg-borderDim rounded text-[10px]">{savedPresets.length}</span>
+              </button>
+
+              <button
+                onClick={() => setShowSaveModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded bg-panelAlt border border-borderDim hover:border-cyan-500/50 text-gray-300 transition-all"
+              >
+                <i data-lucide="save" className="w-3.5 h-3.5 text-cyan-400"></i>
+                SAVE PRESET
+              </button>
+
+              <button
+                onClick={exportMarkdown}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded bg-panelAlt border border-borderDim hover:border-emerald-500/50 text-gray-300 transition-all"
+              >
+                <i data-lucide="download" className="w-3.5 h-3.5 text-emerald-400"></i>
+                EXPORT .MD
+              </button>
+            </div>
+          </header>
+
+          {/* Main Workspace: Two Column Layout */}
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-hidden">
+
+            {/* ========================================================================= */}
+            {/* LEFT / INPUT FORGE CONTROLS PANEL (5 Cols)                               */}
+            {/* ========================================================================= */}
+            <div className="lg:col-span-5 border-r border-borderDim bg-[#080C14] flex flex-col h-auto lg:h-[calc(100vh-53px)] overflow-y-auto">
+              
+              {/* Task Input Section */}
+              <div className="p-4 border-b border-borderDim bg-panel/60">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-mono font-bold tracking-wider text-cyan-400 flex items-center gap-1.5">
+                    <i data-lucide="terminal" className="w-3.5 h-3.5"></i>
+                    WHAT SHOULD THE AGENT DO?
+                  </label>
+                  <span className="text-[10px] font-mono text-gray-400">RAW TASK INPUT</span>
+                </div>
+
+                {/* Quick Presets Bar */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-2 no-scrollbar">
+                  <span className="text-[10px] font-mono text-gray-400 uppercase tracking-wider shrink-0">QUICK:</span>
+                  {QUICK_TASKS.map((item, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setRawTask(item.task);
+                        setDomainKey(item.domain);
+                        setSelectedRoles(DOMAIN_PACKS[item.domain].defaultRoles);
+                        setIntensityId(item.intensity);
+                      }}
+                      className="text-[11px] font-mono px-2 py-0.5 rounded bg-panelAlt border border-borderDim hover:border-cyan-500/50 text-gray-300 whitespace-nowrap transition-colors"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                <textarea
+                  value={rawTask}
+                  onChange={(e) => setRawTask(e.target.value)}
+                  placeholder="e.g. Make this repo into an insane experimental audio workstation with advanced DSP, visualization, and better architecture."
+                  className="w-full h-28 p-3 rounded bg-void border border-borderDim focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 text-sm font-mono text-slate-100 placeholder:text-gray-600 outline-none resize-none transition-all leading-relaxed"
+                />
+              </div>
+
+              {/* Sub-Panel Tabs Navigation */}
+              <div className="flex border-b border-borderDim bg-panelAlt/60 px-4 pt-2 gap-2">
+                {[
+                  { id: 'editor', label: '1. CORE PROFILES', icon: 'layers' },
+                  { id: 'dna', label: '2. PROMPT DNA', icon: 'sliders' },
+                  { id: 'rules', label: '3. FORCE / BAN RULES', icon: 'shield-alert' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`pb-2 px-3 text-xs font-mono font-medium flex items-center gap-1.5 border-b-2 transition-all ${
+                      activeTab === tab.id
+                        ? 'border-cyan-400 text-cyan-300 font-bold'
+                        : 'border-transparent text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    <i data-lucide={tab.icon} className="w-3.5 h-3.5"></i>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Tab Contents */}
+              <div className="p-4 space-y-5 flex-1">
+                
+                {/* TAB 1: CORE PROFILES & DOMAIN */}
+                {activeTab === 'editor' && (
+                  <div className="space-y-4">
+                    {/* Domain Dropdown */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-mono font-semibold text-gray-300">
+                          DOMAIN ARCHETYPE PACK
+                        </label>
+                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-950/60 border border-cyan-800 text-cyan-400">
+                          {DOMAIN_PACKS[domainKey].badge}
+                        </span>
+                      </div>
+                      <select
+                        value={domainKey}
+                        onChange={(e) => handleDomainChange(e.target.value)}
+                        className="w-full p-2.5 rounded bg-panel border border-borderDim focus:border-cyan-400 text-xs font-mono text-cyan-300 outline-none cursor-pointer"
+                      >
+                        {Object.values(DOMAIN_PACKS).map(d => (
+                          <option key={d.id} value={d.id} className="bg-panel text-gray-200">
+                            {d.name} — {d.badge}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-gray-400 mt-1.5 leading-normal">
+                        {DOMAIN_PACKS[domainKey].description}
+                      </p>
+                    </div>
+
+                    {/* Intensity Mode Selector */}
+                    <div>
+                      <label className="text-xs font-mono font-semibold text-gray-300 mb-1.5 block">
+                        AGENCY & INTENSITY MODE
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {INTENSITY_MODES.map(mode => {
+                          const isSelected = intensityId === mode.id;
+                          return (
+                            <button
+                              key={mode.id}
+                              onClick={() => setIntensityId(mode.id)}
+                              className={`p-2 rounded text-left border transition-all ${
+                                isSelected
+                                  ? 'bg-cyan-950/30 border-cyan-400 text-cyan-200 shadow-sm'
+                                  : 'bg-panel border-borderDim hover:border-borderBright text-gray-400'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-mono font-bold text-white">{mode.name}</span>
+                                <span className="text-[9px] font-mono px-1 rounded bg-borderDim text-cyan-300">
+                                  {mode.multiplier}x
+                                </span>
+                              </div>
+                              <div className="text-[10px] font-mono text-gray-400 truncate mt-0.5">
+                                {mode.tag}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Role Stack Multi-Select */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-mono font-semibold text-gray-300">
+                          ROLE STACK COMPOSITION ({selectedRoles.length})
+                        </label>
+                        <button
+                          onClick={() => setSelectedRoles(ALL_ROLES.map(r => r.id))}
+                          className="text-[10px] font-mono text-cyan-400 hover:underline"
+                        >
+                          SELECT ALL
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto p-1 bg-void/50 border border-borderDim rounded">
+                        {ALL_ROLES.map(role => {
+                          const checked = selectedRoles.includes(role.id);
+                          return (
+                            <label
+                              key={role.id}
+                              className={`flex items-start gap-2 p-2 rounded cursor-pointer border text-xs transition-all ${
+                                checked
+                                  ? 'bg-panelAlt border-cyan-500/40 text-gray-200'
+                                  : 'bg-panel/40 border-transparent text-gray-400 hover:bg-panel'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleRole(role.id)}
+                                className="mt-0.5 rounded bg-void border-borderDim text-cyan-400 focus:ring-0 cursor-pointer"
+                              />
+                              <div className="leading-tight">
+                                <span className="font-mono font-medium block text-[11px] text-white">
+                                  {role.id}
+                                </span>
+                                <span className="text-[9px] text-gray-400 block line-clamp-1">
+                                  {role.desc}
+                                </span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Modular Output Section Toggles */}
+                    <div>
+                      <label className="text-xs font-mono font-semibold text-gray-300 mb-1.5 block">
+                        SYNTHESIZED MODULE INCLUSION
+                      </label>
+                      <div className="grid grid-cols-2 gap-1.5 text-xs font-mono">
+                        {[
+                          { id: 'systemHeader', label: 'Role & Context' },
+                          { id: 'missionDefinition', label: 'Mission Directive' },
+                          { id: 'domainConstraints', label: 'Domain Laws' },
+                          { id: 'promptDNA', label: 'DNA Sliders' },
+                          { id: 'behaviorMatrix', label: 'Force/Ban Matrix' },
+                          { id: 'reportingContract', label: 'Output Contract' }
+                        ].map(sec => (
+                          <label
+                            key={sec.id}
+                            className="flex items-center gap-2 p-1.5 rounded bg-panel border border-borderDim text-gray-300 cursor-pointer hover:border-borderBright"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={activeSections[sec.id]}
+                              onChange={(e) => setActiveSections(prev => ({ ...prev, [sec.id]: e.target.checked }))}
+                              className="rounded bg-void border-borderDim text-cyan-400 focus:ring-0 cursor-pointer"
+                            />
+                            <span className="text-[11px] truncate">{sec.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: PROMPT DNA SLIDERS */}
+                {activeTab === 'dna' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-mono text-gray-300">
+                        PARAMETRIC PROMPT DNA (0–100)
+                      </div>
+                      <button
+                        onClick={mutateDNA}
+                        className="flex items-center gap-1 text-[11px] font-mono px-2 py-1 rounded bg-panelAlt border border-borderDim text-cyan-400 hover:border-cyan-400"
+                      >
+                        <i data-lucide="shuffle" className="w-3 h-3"></i>
+                        MUTATE DNA
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                      <div className="space-y-3">
+                        {[
+                          { key: 'implementation', label: 'Implementation', tip: 'Executable code vs theory' },
+                          { key: 'creativity', label: 'Creativity', tip: 'Unorthodox approaches' },
+                          { key: 'systems', label: 'Systems Thinking', tip: 'State models & boundaries' },
+                          { key: 'technical', label: 'Technical Depth', tip: 'DSP, Math, AST complexity' }
+                        ].map(item => (
+                          <div key={item.key} className="space-y-1">
+                            <div className="flex justify-between text-xs font-mono">
+                              <span className="text-gray-300">{item.label}</span>
+                              <span className="text-cyan-400 font-bold">{dna[item.key]}%</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={dna[item.key]}
+                              onChange={(e) => setDna(prev => ({ ...prev, [item.key]: parseInt(e.target.value) }))}
+                              className="range-slider w-full"
+                            />
+                            <div className="text-[9px] font-mono text-gray-400">{item.tip}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-3">
+                        {[
+                          { key: 'autonomy', label: 'Autonomy / Agency', tip: 'Decisive execution without asking' },
+                          { key: 'documentation', label: 'Documentation', tip: 'JSDoc, diagrams, guides' },
+                          { key: 'adversarial', label: 'Adversarial Critique', tip: 'Vulnerabilities & failure maps' },
+                          { key: 'experimentalism', label: 'Experimentalism', tip: 'WebGPU, Worklets, SIMD' }
+                        ].map(item => (
+                          <div key={item.key} className="space-y-1">
+                            <div className="flex justify-between text-xs font-mono">
+                              <span className="text-gray-300">{item.label}</span>
+                              <span className="text-cyan-400 font-bold">{dna[item.key]}%</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={dna[item.key]}
+                              onChange={(e) => setDna(prev => ({ ...prev, [item.key]: parseInt(e.target.value) }))}
+                              className="range-slider w-full"
+                            />
+                            <div className="text-[9px] font-mono text-gray-400">{item.tip}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Integrated Radar Visualizer inside DNA tab */}
+                    <div className="pt-2 flex justify-center">
+                      <DnaRadarCanvas dna={dna} color={DOMAIN_PACKS[domainKey].color} />
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: BEHAVIOR RULES (FORCE & BAN) */}
+                {activeTab === 'rules' && (
+                  <div className="space-y-4">
+                    {/* Mandatory Inoculations */}
+                    <div>
+                      <div className="text-xs font-mono font-bold text-emerald-400 mb-2 flex items-center gap-1.5">
+                        <i data-lucide="check-circle" className="w-3.5 h-3.5"></i>
+                        FORCE RULES (MANDATORY INOCULATIONS)
+                      </div>
+                      <div className="space-y-2">
+                        {BEHAVIOR_RULES.force.map(rule => (
+                          <label
+                            key={rule.id}
+                            className={`flex items-start gap-2.5 p-2 rounded border cursor-pointer transition-all ${
+                              forceRules[rule.id]
+                                ? 'bg-panelAlt border-emerald-500/40 text-gray-200'
+                                : 'bg-panel/40 border-borderDim text-gray-400'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={forceRules[rule.id]}
+                              onChange={(e) => setForceRules(prev => ({ ...prev, [rule.id]: e.target.checked }))}
+                              className="mt-1 rounded bg-void border-borderDim text-emerald-400 focus:ring-0 cursor-pointer"
+                            />
+                            <div>
+                              <div className="text-xs font-mono font-semibold text-emerald-300">{rule.label}</div>
+                              <div className="text-[10px] font-mono text-gray-400">{rule.desc}</div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Strict Bans */}
+                    <div>
+                      <div className="text-xs font-mono font-bold text-crimson mb-2 flex items-center gap-1.5">
+                        <i data-lucide="x-circle" className="w-3.5 h-3.5"></i>
+                        BAN RULES (ZERO-TOLERANCE ANTI-SLOP)
+                      </div>
+                      <div className="space-y-2">
+                        {BEHAVIOR_RULES.ban.map(rule => (
+                          <label
+                            key={rule.id}
+                            className={`flex items-start gap-2.5 p-2 rounded border cursor-pointer transition-all ${
+                              banRules[rule.id]
+                                ? 'bg-panelAlt border-red-500/40 text-gray-200'
+                                : 'bg-panel/40 border-borderDim text-gray-400'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={banRules[rule.id]}
+                              onChange={(e) => setBanRules(prev => ({ ...prev, [rule.id]: e.target.checked }))}
+                              className="mt-1 rounded bg-void border-borderDim text-crimson focus:ring-0 cursor-pointer"
+                            />
+                            <div>
+                              <div className="text-xs font-mono font-semibold text-red-300">{rule.label}</div>
+                              <div className="text-[10px] font-mono text-gray-400">{rule.desc}</div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+
+              {/* Bottom Sticky Action Forge Button */}
+              <div className="p-4 border-t border-borderDim bg-panel/90 backdrop-blur-sm sticky bottom-0">
+                <button
+                  onClick={handleForge}
+                  className="w-full py-3 px-4 rounded bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-void font-mono font-bold text-sm tracking-wider flex items-center justify-center gap-2 transition-all shadow-glow-cyan transform active:scale-[0.99]"
+                >
+                  <i data-lucide="flame" className="w-4 h-4 fill-current"></i>
+                  FORGE MEGA-PROMPT
+                  <span className="text-[10px] bg-void/20 px-1.5 py-0.5 rounded font-mono ml-2">
+                    {compiled.tokenEstimate} TOKENS
+                  </span>
+                </button>
+              </div>
+
+            </div>
+
+
+            {/* ========================================================================= */}
+            {/* RIGHT / MEGA-PROMPT COMPILER STUDIO (7 Cols)                             */}
+            {/* ========================================================================= */}
+            <div className="lg:col-span-7 bg-[#06090E] flex flex-col h-auto lg:h-[calc(100vh-53px)] overflow-hidden">
+              
+              {/* Studio Header & Metrics Bar */}
+              <div className="p-3.5 border-b border-borderDim bg-panel/80 flex flex-wrap items-center justify-between gap-2">
+                
+                {/* Telemetry badges */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-gray-200 flex items-center gap-1.5">
+                    <i data-lucide="cpu" className="w-3.5 h-3.5 text-cyan-400"></i>
+                    COMPILED ARTIFACT
+                  </span>
+
+                  <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-mono text-gray-400">
+                    <span className="px-2 py-0.5 rounded bg-panelAlt border border-borderDim text-cyan-300">
+                      {compiled.tokenEstimate.toLocaleString()} est. tokens
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-panelAlt border border-borderDim text-gray-300">
+                      {compiled.charCount.toLocaleString()} chars
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-panelAlt border border-borderDim text-emerald-400">
+                      {compiled.sections.length} modules
+                    </span>
+                  </div>
+                </div>
+
+                {/* View switcher & Copy Trigger */}
+                <div className="flex items-center gap-2">
+                  <div className="flex rounded bg-panelAlt border border-borderDim p-0.5">
+                    <button
+                      onClick={() => setViewMode('rendered')}
+                      className={`px-2.5 py-1 text-xs font-mono rounded transition-all ${
+                        viewMode === 'rendered' ? 'bg-cyan-950 text-cyan-300 border border-cyan-800' : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      STRUCTURED
+                    </button>
+                    <button
+                      onClick={() => setViewMode('raw')}
+                      className={`px-2.5 py-1 text-xs font-mono rounded transition-all ${
+                        viewMode === 'raw' ? 'bg-cyan-950 text-cyan-300 border border-cyan-800' : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      RAW TEXT
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={copyToClipboard}
+                    className={`px-4 py-1.5 rounded text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
+                      copied
+                        ? 'bg-emerald-500 text-void shadow-glow-cyan'
+                        : 'bg-cyan-500 hover:bg-cyan-400 text-void'
+                    }`}
+                  >
+                    <i data-lucide={copied ? "check" : "copy"} className="w-3.5 h-3.5"></i>
+                    {copied ? 'COPIED TO CLIPBOARD' : 'COPY PROMPT'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Mega-Prompt Content Viewer Area */}
+              <div className="flex-1 p-4 lg:p-6 overflow-y-auto space-y-6 font-mono text-sm leading-relaxed">
+                
+                {/* Visualizer Bar Banner */}
+                <div className="p-3 rounded-lg border border-borderDim bg-panel/40 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: compiled.domain.color }}></div>
+                    <span className="font-mono text-gray-300">TARGET: <strong className="text-white">{compiled.domain.name}</strong></span>
+                    <span className="text-gray-600">|</span>
+                    <span className="text-gray-300">INTENSITY: <strong className="text-cyan-300">{compiled.intensity.name}</strong></span>
+                  </div>
+                  <div className="text-[11px] text-gray-400">
+                    Deterministic Assembly @ {lastForgedTime}
+                  </div>
+                </div>
+
+                {viewMode === 'raw' ? (
+                  /* RAW MONOSPACE TEXT VIEW */
+                  <pre className="p-4 rounded-lg bg-panel border border-borderDim text-slate-200 text-xs font-mono overflow-x-auto code-editor-layer selection:bg-cyan-500/40">
+                    {compiled.fullText}
+                  </pre>
+                ) : (
+                  /* STRUCTURED MODULAR SECTION BLOCKS */
+                  <div className="space-y-4">
+                    {compiled.sections.map((sec, idx) => (
+                      <div
+                        key={sec.id}
+                        className="rounded-lg border border-borderDim bg-panel/90 overflow-hidden hover:border-borderBright transition-all shadow-terminal"
+                      >
+                        {/* Section Header */}
+                        <div className="px-4 py-2.5 bg-panelAlt/90 border-b border-borderDim flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-cyan-300 flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                            {sec.title}
+                          </span>
+                          <span className="text-[10px] font-mono text-gray-400">
+                            SECTION #{idx + 1}
+                          </span>
+                        </div>
+                        {/* Section Body */}
+                        <div className="p-4 text-xs font-mono text-slate-200 whitespace-pre-wrap leading-relaxed selection:bg-cyan-500/30">
+                          {sec.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Status Bar */}
+              <div className="px-4 py-2 border-t border-borderDim bg-panelAlt/80 flex items-center justify-between text-[11px] font-mono text-gray-400">
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1">
+                    <i data-lucide="check" className="w-3 h-3 text-emerald-400"></i> Local-Only Logic
+                  </span>
+                  <span className="hidden sm:inline-block text-gray-600">•</span>
+                  <span className="hidden sm:inline-block">Deterministic Pattern Synthesis</span>
+                </div>
+                <div>
+                  READY FOR LLM INGESTION (CLAUDE 3.7 / GPT-4.5 / O3 / DEEPSEEK-R1)
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+          {/* ========================================================================= */}
+          {/* PRESETS & HISTORY MODAL / DRAWER                                          */}
+          {/* ========================================================================= */}
+          {isHistoryOpen && (
+            <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex justify-end">
+              <div className="w-full max-w-md bg-panel border-l border-borderDim h-full flex flex-col p-4 shadow-2xl">
+                <div className="flex items-center justify-between pb-3 border-b border-borderDim">
+                  <h3 className="font-mono font-bold text-sm text-white flex items-center gap-2">
+                    <i data-lucide="folder" className="w-4 h-4 text-cyan-400"></i>
+                    SAVED PRESETS & RECENT FORGES
+                  </h3>
+                  <button
+                    onClick={() => setIsHistoryOpen(false)}
+                    className="p-1 rounded hover:bg-panelAlt text-gray-400 hover:text-white"
+                  >
+                    <i data-lucide="x" className="w-4 h-4"></i>
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto py-3 space-y-4">
+                  {/* Saved User Presets */}
+                  <div>
+                    <div className="text-xs font-mono font-semibold text-cyan-400 mb-2">
+                      INDEXEDDB SAVED PRESETS ({savedPresets.length})
+                    </div>
+                    {savedPresets.length === 0 ? (
+                      <p className="text-xs font-mono text-gray-500 italic p-3 bg-void/50 rounded border border-borderDim">
+                        No saved presets found. Click "SAVE PRESET" on the header to store your configurations locally.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {savedPresets.map(preset => (
+                          <div
+                            key={preset.id}
+                            onClick={() => loadPreset(preset)}
+                            className="p-2.5 rounded bg-panelAlt border border-borderDim hover:border-cyan-400/60 cursor-pointer transition-all flex items-center justify-between group"
+                          >
+                            <div>
+                              <div className="text-xs font-mono font-bold text-white group-hover:text-cyan-300">
+                                {preset.name}
+                              </div>
+                              <div className="text-[10px] font-mono text-gray-400">
+                                {preset.date} — Domain: {DOMAIN_PACKS[preset.state?.domainKey]?.name || 'Standard'}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={(e) => deletePreset(preset.id, e)}
+                                title="Delete preset"
+                                className="p-1 rounded text-gray-500 hover:text-crimson hover:bg-void"
+                              >
+                                <i data-lucide="trash-2" className="w-3.5 h-3.5"></i>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Transient Session History */}
+                  {history.length > 0 && (
+                    <div>
+                      <div className="text-xs font-mono font-semibold text-gray-300 mb-2">
+                        RECENT CLIPBOARD FORGES
+                      </div>
+                      <div className="space-y-2">
+                        {history.map(item => (
+                          <div key={item.id} className="p-2 rounded bg-void/50 border border-borderDim text-xs font-mono">
+                            <div className="flex justify-between text-[10px] text-cyan-400">
+                              <span>{item.domain}</span>
+                              <span className="text-gray-500">{item.timestamp}</span>
+                            </div>
+                            <div className="text-gray-300 mt-1 truncate">{item.task}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-3 border-t border-borderDim">
+                  <button
+                    onClick={exportJSON}
+                    className="w-full py-2 px-3 text-xs font-mono rounded bg-panelAlt border border-borderDim hover:border-borderBright text-gray-300 flex items-center justify-center gap-2"
+                  >
+                    <i data-lucide="file-json" className="w-3.5 h-3.5 text-cyan-400"></i>
+                    EXPORT ALL CONFIGS AS JSON
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* SAVE PRESET MODAL                                                         */}
+          {/* ========================================================================= */}
+          {showSaveModal && (
+            <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="w-full max-w-md bg-panel border border-cyan-500/40 rounded-lg p-5 shadow-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-borderDim pb-2">
+                  <h3 className="font-mono font-bold text-sm text-white flex items-center gap-2">
+                    <i data-lucide="save" className="w-4 h-4 text-cyan-400"></i>
+                    SAVE CURRENT PRESET
+                  </h3>
+                  <button
+                    onClick={() => setShowSaveModal(false)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <i data-lucide="x" className="w-4 h-4"></i>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-mono text-gray-300 block">
+                    Preset Label / Identifier:
+                  </label>
+                  <input
+                    type="text"
+                    value={presetNameInput}
+                    onChange={(e) => setPresetNameInput(e.target.value)}
+                    placeholder={`e.g. Master DSP Rig [${DOMAIN_PACKS[domainKey].name}]`}
+                    className="w-full p-2.5 rounded bg-void border border-borderDim text-xs font-mono text-white focus:border-cyan-400 outline-none"
+                    autoFocus
+                  />
+                  <p className="text-[10px] font-mono text-gray-500">
+                    Saves entire state (Task, Domain, Roles, Sliders, Behavior Rules) to your browser's IndexedDB.
+                  </p>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setShowSaveModal(false)}
+                    className="px-3 py-1.5 rounded text-xs font-mono bg-panelAlt border border-borderDim text-gray-300 hover:bg-borderDim"
+                  >
+                    CANCEL
+                  </button>
+                  <button
+                    onClick={saveCurrentPreset}
+                    className="px-4 py-1.5 rounded text-xs font-mono font-bold bg-cyan-500 hover:bg-cyan-400 text-void"
+                  >
+                    SAVE TO STORAGE
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Subtle Scanline Effect */}
+          <div className="scanlines fixed inset-0 pointer-events-none z-30 opacity-40"></div>
+        </div>
+      );
+    }
+
+    // Render the React Application into DOM
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<PromptForgeApp />);
+  </script>
+</body>
+</html>
