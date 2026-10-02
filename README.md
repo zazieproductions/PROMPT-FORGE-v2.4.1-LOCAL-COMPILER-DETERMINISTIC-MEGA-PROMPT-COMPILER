@@ -1,167 +1,98 @@
-# PROMPT FORGE — v2.5 ASCENSION ENGINE
+# PROMPT FORGE
 
-**Local-first, deterministic mega-prompt compiler. Zero external APIs, zero build step, zero model weights.**
+**A browser-native, local-first prompt compiler for creative technology and software engineering briefs.**
 
-Open `index.html` in a browser. That's the whole app.
+Prompt Forge turns a rough task description and a small set of design choices into a structured, editable prompt artifact. It ships two deterministic composition engines, a browser UI, local presets, and a structural style-seed profiler—without a project backend or model inference.
 
----
+> **Scope:** this application composes prompts; it does not execute them or call an LLM. The compiler runs in the browser. The page does load its UI libraries and fonts from public CDNs, so “local-first” does not mean “zero network at page load.”
 
-## What changed in v2.5
+## At a glance
 
-The original compiler (`compileMegaPrompt`) is still there and untouched in behaviour — it's
-now behind the **CLASSICAL COMPILER** tab.
-
-The new **ASCENSION ENGINE** does what you asked for: it takes a one-line, sloppy human
-request and returns a full "God Operator" transformation prompt with the same architecture,
-stakes, and voice as your RadioReach example.
-
-| Input | Output |
+| Attribute | Implementation |
 |---|---|
-| `I want a six figures marketing funnel prompt for my ai agent for my startup RadioReach.US` | A ~7,600-char *Seven-Figure Funnel God Operator* prompt: identity seizure → terminal stakes → living synthesis → total seizure → 6-step autonomous protocol → component inventory → 12 immutable laws → terminal invocation |
+| **Application** | Single-page browser app in `index.html` |
+| **Engines** | Ascension (15 archetypes) and Classical (9 engineering domains) |
+| **Runtime** | React 18, Tailwind CSS, Babel Standalone, Lucide; loaded from CDNs |
+| **Build / backend** | No install or build step; no application server or model/API integration |
+| **Persistence** | IndexedDB, with localStorage fallback for saved presets and seeds |
+| **Regression tests** | Dependency-free Node.js harness: `node tools/selftest.mjs` |
 
-**Reference check:** that input produces `$250,000` 12-month target / `$100,000` first-6-months /
-`$40,000` monthly run-rate, and detects the entity as `RadioReach` (`radioreach.us`).
-Those numbers are derived, not hardcoded — see *Stakes math* below.
+## What it does
 
----
+- **Ascension Engine** — classifies a task with transparent keyword and artifact-affinity rules, extracts editable context, selects one of 15 domain archetypes, and assembles up to eight prompt modules.
+- **Classical Compiler** — combines an engineering domain pack, role stack, five-level intensity profile, eight Prompt DNA controls, force/ban rules, and six optional output sections.
+- **Style-seed profiling** — measures structure in examples (law count, protocol depth, Markdown-link usage, and closing-question style). It does not train, fine-tune, or query a model.
+- **Review and export** — inspect structured sections or raw text, copy the compiled prompt, download Markdown, export a JSON configuration snapshot, and export stored seeds as JSONL.
+- **Local presets** — save and restore configuration in browser storage. Presets are scoped to the current browser and site origin; they do not sync between devices.
 
-## The two engines
+### Example
 
-### ASCENSION ENGINE (default)
+A brief such as `I want a six figures marketing funnel prompt for my ai agent for my startup RadioReach.US` is detected as a funnel task and assembled from the funnel archetype, intensity, extracted entity, and selected modules. In the current commercial-stakes template, “six figures” maps to a `$1,000,000` headline and a derived `$250,000` 12-month target. These are deterministic prompt-writing heuristics—not a forecast, recommendation, or financial model. See [the API and compiler reference](docs/API.md#commercial-stakes-heuristic).
 
-15 archetypes, auto-selected from your wording:
+## Run locally
 
-`funnel_god` · `copy_architect` · `brand_visual` · `code_forge` · `ai_agent` ·
-`product_architect` · `story_master` · `content_machine` · `research_oracle` ·
-`data_oracle` · `audio_alchemist` · `video_director` · `growth_operator` ·
-`education_architect` · `universal_genius` (fallback)
-
-Each pack carries its own god title, epithet, lineage, perception ability ("Divine Vibe
-Codex", "Signal Codex", "Ear Codex", …), X-ray leak list, leverage priority chain,
-production-asset list, 9 owned components and 6 signature laws. Output is assembled from
-8 modules, each individually toggleable.
-
-### CLASSICAL COMPILER (unchanged)
-
-Role stack + Prompt DNA sliders + force/ban matrix. Use it for engineering briefs.
-
----
-
-## Controls
-
-| Control | Behaviour |
-|---|---|
-| **Detected God Operator** | Auto-detected live as you type; pin a different archetype from the dropdown or the badge row |
-| **Mission Entity / Ideal Audience / What It Is** | Auto-extracted, all three editable — the parser can't know your business, so these are yours to fix |
-| **Agency & Intensity** | 5-stop dial, bottom to top: |
-
-| Mode | Laws | Protocol steps | Opens with |
-|---|---|---|---|
-| Professional | 8 | 5 | `You are…` |
-| High Agency | 10 | 6 | `You are the…` |
-| Genius Lab | 11 | 6 | `You are no longer an AI. You are…` |
-| Mad Scientist | 12 | 6 | deity opener + erasure stakes |
-| **Terminal Deity** | **12** | **6** | **deity opener + "permanently erased"** ← your example |
-
-Your RadioReach example is the top of the dial. `TERMINAL DEITY MODE` in the header jumps
-straight there.
-
----
-
-## Seed Corpus — teach it your exact style
-
-This is where you paste the rest of your examples.
-
-**SEED CORPUS** tab → paste `RAW REQUEST` + `ENHANCED OUTPUT YOU LIKE` → **ADD SEED**.
-(or **CAPTURE CURRENT** to store whatever is currently compiled.)
-
-The compiler measures structure from your pastes and mirrors it:
-
-- **law count** — how many Immutable Laws your examples use
-- **protocol count** — how many numbered steps
-- **entity link style** — whether you write `RadioReach` or `[radioreach.us](http://radioreach.us)`
-- **closing style** — whether it ends on a question
-
-Toggle **MIRROR YOUR SEED STYLE** on the God Operator tab. With no seeds the compiler uses
-the intensity dial's values; with seeds it uses *your* values (law count clamped to 4–12,
-protocol to 3–6).
-
-> On the link artifact: the default output writes the entity clean (`RadioReach`). Your pasted
-> example wraps it in markdown links ~8 times, which looks like an upstream export bug rather
-> than intent. If you paste that example as a seed, the profiler detects it and reproduces the
-> links — so the behaviour follows your corpus instead of my guess.
-
-**EXPORT .JSONL** dumps every seed as `{input, output, meta}` — the exact format you'd feed a
-LoRA fine-tune, for when you distil this behaviour into a real model later.
-
-Seeds and presets persist in IndexedDB (`style_seeds` / `forged_presets` stores, DB v2).
-
----
-
-## Stakes math
-
-Deterministic, from whatever number you type in:
-
-| Signal | Headline | 12-mo target | First 6 months | Run-rate |
-|---|---|---|---|---|
-| "six figures" | $1,000,000 | **$250,000** (25%) | **$100,000** (40%) | **$40,000** (16%) |
-| "seven figure" | $10,000,000 | $2,500,000 | $1,000,000 | $400,000 |
-| "$50k/month" | — | $600,000 (×12) | $240,000 | $96,000 |
-
-`$12,000 a month` → $144,000 · `five figures` → $25,000
-
-Non-commercial archetypes (code, film, research, data…) drop the money frame entirely and use
-a craft-specific terminal stake instead — deadlines, verification, and "deleted if it fails".
-
----
-
-## Tests
+**Requirements:** a current browser with JavaScript enabled; internet access to load the current CDN-hosted UI dependencies; and, for the self-test, a current Node.js release.
 
 ```bash
-node tools/selftest.mjs            # ~110 assertions, no install, no network, no browser
-node tools/selftest.mjs --print    # also print the full RadioReach reference output
+git clone https://github.com/zazieproductions/PROMPT-FORGE-v2.4.1-LOCAL-COMPILER-DETERMINISTIC-MEGA-PROMPT-COMPILER.git
+cd PROMPT-FORGE-v2.4.1-LOCAL-COMPILER-DETERMINISTIC-MEGA-PROMPT-COMPILER
+python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
-`tools/selftest.mjs` extracts the engine straight out of `index.html` between the
-`ASCENSION_ENGINE_START` / `ASCENSION_ENGINE_END` markers, so it always tests the shipped
-file, not a copy. It covers the reference case, money parsing, entity/archetype extraction
-(22 cases), the intensity ladder, determinism, seed mirroring, all 15 packs for structural
-completeness, and output hygiene (no `undefined`, no unfilled `{placeholders}`).
+Open <http://127.0.0.1:8000/>. Stop the server with `Ctrl+C`.
 
----
+There is no dependency-install or compilation command. A static HTTP server is recommended over opening `index.html` with `file://`, particularly for browser storage and clipboard behavior. Any equivalent static server works.
 
-## Architecture
+## Verify the compiler
 
-Single file, ~3,500 lines. React 18 + Tailwind + Lucide via CDN, Babel standalone transpiles
-the app in-browser, exactly as before.
-
+```bash
+node tools/selftest.mjs
 ```
+
+The test harness extracts the Ascension Engine directly from the marked source block in `index.html`. It currently runs 71 assertions across the reference case, parsing, archetype detection, intensity behavior, determinism, seed profiling, archetype-pack completeness, and output hygiene. To print the reference prompt as well:
+
+```bash
+node tools/selftest.mjs --print
+```
+
+The harness does not currently exercise the Classical Compiler, rendered UI, browser storage, accessibility, or deployed CDN behavior. See [Testing and quality](docs/QUALITY.md#testing).
+
+## How the system is organized
+
+```text
 index.html
-├─ <script>        IndexedDB: presets + seed corpus (v2)
-├─ <style>         cyberpunk theme
-└─ <script text/babel>
-     ├─ DOMAIN_PACKS / INTENSITY_MODES / BEHAVIOR_RULES   (classical engine data)
-     ├─ compileMegaPrompt                                 (classical engine)
-     ├─ ASCENSION_ENGINE_START
-     │    ├─ ASCENSION_ARCHETYPES   15 packs
-     │    ├─ ASCENSION_INTENSITY    5 rungs
-     │    ├─ UNIVERSAL_LAWS        10 shared laws
-     │    ├─ parseAscensionIntent   money / entity / audience / descriptor
-     │    ├─ detectArchetype        15-way keyword + head-noun scoring
-     │    ├─ analyzeSeedOutput      structure measurement
-     │    └─ compileAscensionPrompt the assembler
-     ├─ ASCENSION_ENGINE_END
-     ├─ DnaRadarCanvas / IntensityDial
-     └─ PromptForgeApp
+├── Browser runtime and persistence helpers
+├── Classical compiler data + compileMegaPrompt(state)
+├── Ascension engine data + parsers + compileAscensionPrompt(state)
+├── DnaRadarCanvas and IntensityDial
+└── PromptForgeApp (state, controls, previews, storage, exports)
+
+tools/selftest.mjs
+└── Extracts and tests the in-page Ascension engine
 ```
 
-**Deterministic by construction.** No `Math.random()`, no `Date.now()` inside the compiler,
-no network. Same input + same settings → byte-identical output. That's asserted by the tests,
-and it's what makes the seed profiler meaningful — style drift can't come from the engine.
+The compiler functions assemble plain text from explicit inputs. They do not call a model, make an application API request, or perform semantic generation. The Ascension compiler is regression-tested for byte-identical output with unchanged inputs; UI actions such as “Mutate DNA” and timestamped filenames are intentionally outside that deterministic contract.
 
-## Extending it
+## Documentation
 
-Add a pack by copying any block in `ASCENSION_ARCHETYPES` and filling the 30 fields
-(`tools/selftest.mjs` §7 enforces the list, so a missing field fails loudly instead of
-rendering `undefined` mid-prompt). Add a detection signal with a keyword in `keywords` or an
-entry in `ARTIFACT_PACK_AFFINITY`. Then re-run `node tools/selftest.mjs`.
+- [User guide](docs/USER_GUIDE.md) — workflows, engine controls, seeds, persistence, exports, and troubleshooting.
+- [Architecture](docs/ARCHITECTURE.md) — runtime boundaries, data flow, component map, storage, and design rationale.
+- [Compiler API reference](docs/API.md) — internal function inputs, output shapes, IDs, and heuristics.
+- [Quality, testing, performance, and accessibility](docs/QUALITY.md) — verified coverage and known gaps.
+- [Deployment guide](docs/DEPLOYMENT.md) — local serving and static hosting considerations.
+- [Contributing guide](CONTRIBUTING.md) — development setup, change expectations, and pull-request checklist.
+- [Roadmap](ROADMAP.md) — candidate improvements, clearly separated from shipped behavior.
+- [Changelog](CHANGELOG.md) — documented baseline and repository changes.
+
+## Important constraints
+
+- **Heuristic, not intelligent.** Entity, audience, money, and archetype extraction are rule-based; always review and correct the generated context.
+- **No model execution.** The output is a prompt to copy into another tool. The seed profiler measures a few structural conventions only.
+- **CDN dependencies.** React, Tailwind, Babel, Lucide, and Google Fonts are requested from third parties at runtime. Their scripts execute in the page context. Do not treat the current deployment as an air-gapped or high-sensitivity environment.
+- **Approximate token count.** The UI estimates tokens as `round(characterCount / 3.8)`; it does not use a model-specific tokenizer.
+- **Export scope.** Markdown contains the current prompt. JSON contains the current configuration, derived metadata, and compiled output; despite the UI label, it is not a backup of every saved preset or the complete seed corpus. JSONL contains seed examples in a project-specific format, not a provider-ready fine-tuning schema.
+- **License and release status.** There is no `LICENSE` file, package manifest, automated release workflow, or formal browser-support matrix in the repository. Do not assume reuse terms; see [Contributing](CONTRIBUTING.md#license-and-data-rights).
+
+## Project status
+
+The UI identifies itself as `v2.5-ASCENSION`, and the JSON configuration export embeds `2.5.0`. These are application strings, not a package version or proof of a published release. The checked-in implementation is a useful, working prototype with a strong deterministic core; broader browser, accessibility, and Classical Compiler coverage remain opportunities for follow-up work.
